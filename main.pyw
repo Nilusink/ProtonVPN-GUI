@@ -1,3 +1,5 @@
+import tkinter
+
 from customtkinter.customtkinter_theme_manager import CTkThemeManager
 from protonvpn_cli.country_codes import country_codes
 from protonvpn_cli import connection
@@ -6,6 +8,7 @@ from contextlib import suppress
 from PIL import Image, ImageTk
 from threading import Thread
 import customtkinter as ctk
+from tkinter import Event
 import json
 
 
@@ -19,12 +22,14 @@ SERVER_POSITIONS: dict[str, list] = json.load(open("server_positions.json"))
 
 class Window(ctk.CTk):
     servers_by_country: dict[str, list[dict]]
-    server_objects: list
+    map_country_icons: dict[str, int]
+    map_current_hover: dict[str, int]
     vpn_protocol: str = "udp"
     map_drawn: bool = False
     map_shown: bool = False
     connected: bool = False
     connection_lines: list
+    server_objects: list
     running: bool = True
 
     images: dict[str, ImageTk.PhotoImage]
@@ -34,6 +39,8 @@ class Window(ctk.CTk):
 
         # mutable defaults init
         self.servers_by_country = {}
+        self.map_country_icons = {}
+        self.map_current_hover = {}
         self.connection_lines = []
         self.server_objects = []
 
@@ -42,6 +49,7 @@ class Window(ctk.CTk):
         # load images
         self.images = {
             "speedometer": ImageTk.PhotoImage(Image.open("./icons/speedometer.png").resize(button_icon_size)),
+            "triangle_hover": ImageTk.PhotoImage(Image.open("./icons/triangle.png").resize((24, 24))),
             "disconnect": ImageTk.PhotoImage(Image.open("./icons/disconnect.png").resize((24, 24))),
             "countries": ImageTk.PhotoImage(Image.open("./icons/countries.png").resize(button_icon_size)),
             "thunder": ImageTk.PhotoImage(Image.open("./icons/thunder.png").resize(button_icon_size)),
@@ -77,6 +85,7 @@ class Window(ctk.CTk):
             highlightthickness=0,
         )
         self.map_canvas.bind("<Configure>", lambda _e: self.draw_map_locations())
+        self.map_canvas.bind("<Motion>", self.check_map_hover)
 
         self.default_view = ctk.CTkFrame(self, width=400)
         self.default_view.grid_propagate(False)
@@ -125,7 +134,6 @@ class Window(ctk.CTk):
             text="Connect",
             height=40,
             text_font=("Roboto Medium", -20),
-            command=self.connect_button_func,
         )
         self.connect_button.grid(row=3, column=1, rowspan=2, columnspan=8, sticky="ew")
 
@@ -327,6 +335,7 @@ class Window(ctk.CTk):
             country = country_codes[cc.upper()]
 
             if country not in self.servers_by_country:
+                self.map_canvas.tag_bind(country, "<Button-1>", lambda e, code=cc: self.should_connect(e, code))
                 self.servers_by_country[country] = []
 
             self.servers_by_country[country].append(server)
@@ -340,7 +349,8 @@ class Window(ctk.CTk):
                 x = middle[0] + pos[0]
                 y = middle[1] + pos[1]
 
-                im = self.map_canvas.create_image(x, y, image=self.images["triangle"])
+                im = self.map_canvas.create_image(x, y, image=self.images["triangle"], tags=(country, country+"HOVER"))
+                self.map_country_icons[country+"HOVER"] = im
                 self.server_objects.append(im)
                 done += 1
 
@@ -349,6 +359,49 @@ class Window(ctk.CTk):
                 raise
 
         self.map_drawn = True
+
+    def check_map_hover(self, _event) -> None:
+        """
+        check if the mouse hovers over an icon (map)
+        """
+        middle = (
+            self.map_canvas.winfo_width() / 2,
+            self.map_canvas.winfo_height() / 2,
+        )
+
+        tags = self.map_canvas.gettags("current")
+        for tag in tags:
+            if tag in self.map_country_icons:
+                self.map_canvas.delete(self.map_country_icons[tag])
+
+                country = tag.rstrip("HOVER")
+
+                pos = SERVER_POSITIONS[country.lower()]
+
+                x = middle[0] + pos[0]
+                y = middle[1] + pos[1]
+
+                im = self.map_canvas.create_image(x, y, image=self.images["triangle_hover"],
+                                                  tags=(country, country+"HOVER"))
+                self.map_country_icons[tag] = im
+                self.map_current_hover[tag] = im
+                self.server_objects.append(im)
+
+        for tag in set(self.map_current_hover.keys()) - set(tags):
+            t_id = self.map_current_hover.pop(tag)
+            self.map_canvas.delete(t_id)
+
+            country = tag.rstrip("HOVER")
+
+            pos = SERVER_POSITIONS[country.lower()]
+
+            x = middle[0] + pos[0]
+            y = middle[1] + pos[1]
+
+            im = self.map_canvas.create_image(x, y, image=self.images["triangle"],
+                                              tags=(country, country + "HOVER"))
+            self.map_country_icons[tag] = im
+            self.server_objects.append(im)
 
     def show_map(self) -> None:
         """
@@ -371,19 +424,36 @@ class Window(ctk.CTk):
         self.map_canvas.grid_forget()
         self.geometry("400x720")
 
-    def connect_button_func(self, *_trash):
+    def should_connect(self, event: Event, country_code: str) -> None:
         """
-        function for the (dis)connect button
+        popup asking if you should connect to the country or not
         """
-        if self.connected:
-            if 1:
-                if 2:
-                    if 3:
-                        ...
-            ...
-            return
+        country = country_codes[country_code]
 
-        ...
+        con_window = ctk.CTkToplevel(self.map_canvas, bg="#292733")
+        con_window.wm_overrideredirect(True)
+
+        x = self.winfo_x() + self.map_canvas.winfo_x() + event.x - 100
+        y = self.winfo_y() + self.map_canvas.winfo_y() + event.y - 124
+        con_window.geometry(f"200x100+{x}+{y}")
+
+        con_window.grid_rowconfigure([0, 1], weight=1)
+        con_window.grid_columnconfigure(0, weight=1)
+
+        def destroy_toplevel():
+            con_window.destroy()
+            con_window.update()
+
+        con_window.bind("<FocusOut>", lambda _e: destroy_toplevel())
+
+        lab = ctk.CTkLabel(con_window, text=country, text_font=("Roboto Medium", -18))
+        but = ctk.CTkButton(con_window, text="Connect", fg_color="#06b300", text_font=("Roboto Medium", -17),
+                            command=lambda cc=country_code: connection.country_f(cc))
+
+        lab.grid(row=0, column=0, sticky="nsew", padx=0, pady=10)
+        but.grid(row=1, column=0, sticky="nsew", padx=30, pady=10)
+
+        con_window.focus_set()
 
     def run(self) -> None:
         """
